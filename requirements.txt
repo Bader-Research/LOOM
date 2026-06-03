@@ -1,0 +1,6 @@
+numpy>=1.24
+# optional:
+#   anthropic>=0.40    # to use AnthropicLLM (set ANTHROPIC_API_KEY)
+#   arkouda            # to use ArkoudaArachneBackend (needs a running Chapel server)
+#   arachne            # Arachne graph extension (github.com/Bears-R-Us/arkouda-njit)
+#   pytest             # to run the test suite
