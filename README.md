@@ -18,7 +18,7 @@ offline with no API key and no cluster.
 ```bash
 pip install -r requirements.txt          # just numpy
 python -m examples.community_motif        # the paper's worked example, end to end
-python -m pytest -q                       # 8 tests (needs pytest)
+python -m pytest -q                       # 18 tests (needs pytest)
 ```
 
 Minimal use:
@@ -44,6 +44,7 @@ print(result.log())             # the agent contract-net / reflection trace
 | Cost model for kernel/variant selection | `loom/telemetry.py` (`CostModel`) |
 | Telemetry-grounded performance reflection | `loom/agents.py` (`PerformanceEngineerAgent.reflect`), `Telemetry.is_inefficient` |
 | Invariant-based verification without ground truth | `loom/verify.py`, `VerifierAgent` |
+| Fault-injection evaluation of the validator and Verifier | `eval/` (see `eval/README.md`) |
 | Arkouda/Arachne execution | `loom/backend.py` |
 
 ## Backends

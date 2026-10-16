@@ -39,6 +39,24 @@ def degree_sum(graph) -> Invariant:
     return Invariant("degree_sum", ok, f"sum(deg)={total}, 2|E|={expected}")
 
 
+def simple_symmetric(graph) -> Invariant:
+    """An undirected graph's arc list must be symmetric, with no duplicate arcs
+    and no self-loops. (Under the both-directions representation, degree_sum
+    holds for any even-length arc list; this check is the one that can fail.)"""
+    if not isinstance(graph, GraphData) or graph.directed:
+        return Invariant("simple_symmetric", True, "skipped", skipped=True)
+    n = graph.n
+    fwd = graph.src.astype(np.int64) * n + graph.dst
+    rev = graph.dst.astype(np.int64) * n + graph.src
+    ufwd = np.unique(fwd)
+    dup = len(fwd) - len(ufwd)
+    loops = int(np.sum(graph.src == graph.dst))
+    asym = len(np.setxor1d(ufwd, np.unique(rev)))
+    ok = dup == 0 and loops == 0 and asym == 0
+    return Invariant("simple_symmetric", ok,
+                     f"duplicate arcs={dup}, self-loops={loops}, unmatched arcs={asym}")
+
+
 def partition_covers(labels, n: Optional[int] = None) -> Invariant:
     """A community/component labeling must assign every vertex exactly once."""
     if not isinstance(labels, np.ndarray):
@@ -72,6 +90,38 @@ def per_block_le_global(per_block: Dict[int, int], graph) -> Invariant:
     ok = internal_total <= global_total
     return Invariant("triangles_cross_check", ok,
                      f"sum(internal per-block)={internal_total} <= global={global_total}")
+
+
+def per_block_matches_independent(per_block: Dict[int, int], graph, labels,
+                                  max_block: int = 4096) -> Invariant:
+    """Two-sided cross-check: each block's internal triangle count must equal an
+    independent recount, trace(A_b^3)/6 on the block's induced subgraph.
+    Unlike per_block_le_global this also catches undercounts, zeroed results,
+    and dropped blocks. Blocks larger than max_block are skipped (dense
+    recount); on the Arkouda backend this becomes a server-side reduction."""
+    if not isinstance(graph, GraphData) or not isinstance(labels, np.ndarray):
+        return Invariant("triangles_two_sided", True, "skipped", skipped=True)
+    bad, skipped = [], 0
+    for b in np.unique(labels):
+        idx = np.where(labels == b)[0]
+        if len(idx) > max_block:
+            skipped += 1
+            continue
+        pos = -np.ones(graph.n, dtype=np.int64)
+        pos[idx] = np.arange(len(idx))
+        m = (pos[graph.src] >= 0) & (pos[graph.dst] >= 0)
+        A = np.zeros((len(idx), len(idx)))
+        A[pos[graph.src[m]], pos[graph.dst[m]]] = 1.0
+        expected = int(round(float(((A @ A) * A).sum()) / 6.0))
+        got = int(per_block.get(int(b), 0))
+        if got != expected:
+            bad.append((int(b), got, expected))
+    detail = f"{len(bad)} block(s) disagree with independent recount"
+    if bad:
+        detail += f", e.g. block {bad[0][0]}: reported {bad[0][1]}, recount {bad[0][2]}"
+    if skipped:
+        detail += f"; {skipped} large block(s) skipped"
+    return Invariant("triangles_two_sided", not bad, detail)
 
 
 def k_truss_property(truss: GraphData, k: int) -> Invariant:

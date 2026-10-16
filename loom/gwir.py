@@ -94,6 +94,8 @@ class OpSpec:
     params: Tuple[str, ...] = ()
     executable: bool = True
     doc: str = ""
+    # Allowed values for enumerated parameters (checked by validate()).
+    param_domains: Dict[str, FrozenSet[str]] = field(default_factory=dict, compare=False, hash=False)
 
 
 def _build_library() -> Dict[str, OpSpec]:
@@ -137,6 +139,7 @@ def _build_library() -> Dict[str, OpSpec]:
 
     add(OpSpec(
         "community", inputs=(port(G, required=("sym",), name="g"),), params=("variant",),
+        param_domains={"variant": frozenset({"louvain", "label_propagation"})},
         produce=lambda ins, p: Artifact(PART, {"covers"}),
         doc="Detect communities. Variant is filled by the Algorithm Strategist."))
 
@@ -149,6 +152,7 @@ def _build_library() -> Dict[str, OpSpec]:
         "per_block_triangles",
         inputs=(port(G, required=("sym",), name="g"), port(PART, required=("covers",), name="part")),
         params=("strategy",),
+        param_domains={"strategy": frozenset({"global", "within_community"})},
         produce=lambda ins, p: Artifact(SF, {"block"}),
         doc="Count triangles internal to each block of a partition."))
 
@@ -228,8 +232,9 @@ class GWIR:
             nid = ready.pop(0)
             order.append(nid)
             for m in self.nodes.values():
-                if nid in m.inputs:
-                    indeg[m.nid] -= 1
+                c = m.inputs.count(nid)   # a node may feed several ports of m
+                if c:
+                    indeg[m.nid] -= c
                     if indeg[m.nid] == 0:
                         ready.append(m.nid)
         if len(order) != len(self.nodes):
@@ -261,16 +266,39 @@ class ValidationResult:
         return self.ok
 
 
+# Operations whose output ranges over a new vertex set.
+VERTEX_SET_CREATORS = frozenset({"load", "largest_cc", "k_truss"})
+
+
 def validate(gwir: GWIR) -> ValidationResult:
     """Static GW-IR validation (paper Algorithm 2).
 
     Traverse the DAG in topological order, propagate output types/refinements
     via each op's postcondition, and check every node's precondition against the
-    inferred types of its inputs. Returns the first violation, or Accept.
+    inferred types of its inputs. Also checks enumerated parameter values and
+    that multi-input operations combine artifacts over the same vertex set.
+    Returns the first violation (a cycle is reported as a rejection), or Accept.
     """
-    for nid in gwir.topo():
+    try:
+        order = gwir.topo()
+    except ValueError as e:
+        return ValidationResult(False, None, str(e))
+
+    # Vertex-set identity: the node whose output defines each artifact's vertex
+    # set. Partitions and fields inherit it; load / largest_cc / k_truss create a
+    # new one. Combining artifacts over different vertex sets is rejected.
+    vdom: Dict[int, int] = {}
+
+    for nid in order:
         n = gwir.nodes[nid]
         spec = OP_LIBRARY[n.op]
+
+        # enumerated parameter domains
+        for pname, allowed in spec.param_domains.items():
+            if n.params.get(pname) not in allowed:
+                return ValidationResult(
+                    False, nid,
+                    f"{n.op}: parameter {pname}={n.params.get(pname)!r} not in {sorted(allowed)}")
 
         # arity (the 'report' op is variadic and accepts >= 1 input)
         if n.op == "report":
@@ -293,6 +321,17 @@ def validate(gwir: GWIR) -> ValidationResult:
             if not ok:
                 return ValidationResult(False, nid, f"{n.op}: {why}")
             in_arts.append(src)
+
+        # vertex-set identity across multi-input operations
+        if n.op != "report":
+            doms = {vdom[i] for i in n.inputs if i in vdom}
+            if len(doms) > 1:
+                return ValidationResult(
+                    False, nid, f"{n.op}: inputs range over different vertex sets")
+            if n.op in VERTEX_SET_CREATORS:
+                vdom[nid] = nid
+            elif doms:
+                vdom[nid] = doms.pop()
 
         # postcondition: annotate this node's output
         n.output = spec.produce(in_arts, n.params)
