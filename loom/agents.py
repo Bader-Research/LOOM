@@ -232,18 +232,24 @@ class VerifierAgent(Agent):
     def check_results(self, bb: Blackboard):
         from . import verify as V
         invs = []
-        # graph identity
+        # graph identities
         if bb.last_graph_node is not None:
-            invs.append(V.degree_sum(bb.value(bb.last_graph_node)))
-        # partition coverage + triangle cross-check
+            g = bb.value(bb.last_graph_node)
+            invs.append(V.degree_sum(g))
+            invs.append(V.simple_symmetric(g))
+        # partition coverage + triangle cross-checks
         for nid, node in bb.gwir.nodes.items():
             if not node.executed:
                 continue
             if node.op in ("community", "connected_components"):
-                invs.append(V.partition_covers(bb.value(nid)))
+                g_in = bb.value(node.inputs[0])
+                n = g_in.n if isinstance(g_in, GraphData) else None
+                invs.append(V.partition_covers(bb.value(nid), n))
             if node.op == "per_block_triangles":
                 graph = bb.value(node.inputs[0])
+                labels = bb.value(node.inputs[1])
                 invs.append(V.per_block_le_global(bb.value(nid), graph))
+                invs.append(V.per_block_matches_independent(bb.value(nid), graph, labels))
             if node.op == "k_truss":
                 invs.append(V.k_truss_property(bb.value(nid), int(node.params.get("k", 3))))
         return invs
